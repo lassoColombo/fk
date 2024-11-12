@@ -1,147 +1,288 @@
-let cache_dir = $"($env.HOME)/.cache/fk"
-let actions = [ "logs", "get", "exec", "edit", "delete", "copy", "context", "install_fk"]
-let kinds = ["pod", "deployment", "statefulset", "sts", "daemonset" "job", "cronjob", "service"]
-
-def nufzf [l, h] {
-   $l | str join "\n" | fzf --header $h
-}
-
-def get_namespaces [] {
-  let namespaces_cache = $"($cache_dir)/namespaces.yaml"
-  let empty = ls $cache_dir | where name =~ "namespaces.yaml" | is-empty
-  if not $empty {
-    let namespaces = open $namespaces_cache
-    return $namespaces
-  }
-  let namespaces = kubectl get ns | detect columns | get NAME
-  $namespaces | to yaml | save --force $namespaces_cache 
-  return $namespaces
-}
-
-def fk_logs [] {
-  let namespaces = get_namespaces
-  let namespace = nufzf $namespaces "namespace:"
-  let pods = kubectl -n $namespace get po | detect columns | get NAME
-  let pod =  nufzf $pods "pod:"
-  let follow =  nufzf ["yes", "no"] "follow:"
-  kubectl -n $namespace logs $pod (if $follow == "yes" { "-f" } else { "" })
-}
-
-def fk_get [] {
-  let kind = nufzf $kinds "kind:"
-
-  let namespaces = get_namespaces
-  let namespace = nufzf ($namespaces | append "all") "namespace:"
-  if $namespace == "all" {
-    let repr = nufzf ["narrow", "wide"] "representation:"
-    if $repr == "narrow" {
-      kubectl get $kind -A
-      return null
-    }
-    kubectl get ($kind) -A -o $repr
-    return null
-  }
-
-  let objs = (kubectl -n $namespace get $kind | detect columns | get NAME) | append "all"
-  let obj =  nufzf $objs $"($kind)s:"
-  if $obj == "all" {
-    let repr = nufzf ["wide", "narrow"] "representation:"
-    if $repr == "narrow" {
-      kubectl -n $namespace get $kind
-      return null
-    }
-    kubectl -n $namespace get $kind -o $repr
-    return null
-  }
-
-  let repr = nufzf ["json", "yaml", "wide", "narrow"] "representation:"
-  if $repr == "narrow" {
-    kubectl -n $namespace get $kind $obj
-  }
-  kubectl -n $namespace get $kind $obj -o $repr
-}
-
-def fk_exec [] {
-  let namespaces = get_namespaces
-  let namespace = nufzf $namespaces "namespace:"
-  let pods = kubectl -n $namespace get po | detect columns | get NAME
-  let pod =  nufzf $pods "pod:"
-  let interactive =  nufzf ["yes", "no"] "interactive:"
-  let command = (input "command: ")
-  kubectl -n $namespace exec $pod (if $interactive == "yes" { "-it" } else { "" }) -- $command
-}
-
-
-def fk_cp [] {
-  let namespaces = get_namespaces
-  let namespace = nufzf $namespaces "namespace:"
-  let pods = kubectl -n $namespace get po | detect columns | get NAME
-  let pod =  nufzf $pods "pod:"
-  let container_path = (input "container path: ")
-  let local_path = (input "local path: ")
-  kubectl cp $"($namespace)/($pod):($container_path)" $local_path
-}
-
-def fk_delete [] {
-  let kind = nufzf $kinds "kind:"
-
-  let namespaces = get_namespaces
-  let namespace = nufzf ($namespaces) "namespace:"
-  let objs = (kubectl -n $namespace get $kind | detect columns | get NAME)
-  let obj =  nufzf $objs $"($kind)s:"
-
-  let force = nufzf ["yes", "no" ] "force:"
-  kubectl -n $namespace delete $kind $obj (if $force == "yes" { "--force" } else { "" }) 
-}
-
-def fk_edit [] {
-  let kind = nufzf $kinds "kind:"
-
-  let namespaces = get_namespaces
-  let namespace = nufzf ($namespaces) "namespace:"
-  let objs = (kubectl -n $namespace get $kind | detect columns | get NAME)
-  let obj =  nufzf $objs $"($kind)s:"
-
-  kubectl -n $namespace edit $kind $obj
-}
-
-def fk_ctx [] {
-  let contexts = kubectl config get-contexts | detect columns | get NAME
-  let context = nufzf $contexts "context:"
-
-  kubectl config set-context $context
-}
-
-def fk_install [] {
+def _fk_install [cache_dir: string] {
   mkdir $"($cache_dir)"
 }
 
-let action = nufzf $actions "action:"
+def _fk_uninstall [cache_dir: string] {
+  rm -rf $cache_dir
+}
 
-def main [] {
-  if $action == "install_fk" {
-    fk_install; return null
+def _fk_empty_cache [d: string] {
+  rm -rf $"( $d )/*"
+}
+
+def _fk_fzf [l, h] {
+   $l | str join "\n" | fzf --header $h
+}
+
+def _fk_multifzf [l, h] {
+   $l | str join "\n" | fzf --header $h --multi  --bind 'ctrl-space:toggle+down' | lines
+}
+
+def _fk_get_namespaces [cache_dir: string] {
+  kubectl get ns | detect columns | get NAME
+  let current_context = open $"($env.HOME)/.kube/config" | from yaml | get 'current-context'
+  let contexts_cache = $"($cache_dir)/contexts.yaml"
+  if ( ls $cache_dir | where name =~ "contexts.yaml" | is-empty ) {
+    let current_namespaces = kubectl get ns | detect columns | get NAME
+    let contexts = {} | upsert $current_context $current_namespaces
+    $contexts | to yaml | save --force $contexts_cache 
+    return $current_namespaces
   }
-  if $action == "logs" {
-    fk_logs; return null
+  let contexts = open $contexts_cache
+  if ($contexts | flatten | columns | any {$in == $current_context}) {
+    let current_namespaces = $contexts | get $current_context
+    return $current_namespaces
   }
-  if $action == "get" {
-    fk_get; return null
+  let current_namespaces = kubectl get ns | detect columns | get NAME
+  $contexts | upsert $current_context $current_namespaces 
+  $contexts | to yaml | save --force $contexts_cache 
+  $current_namespaces 
+}
+
+def _fk_logs [cache_dir: string, dry: bool] {
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf $namespaces "namespace:"
+  let pods = kubectl -n $namespace get po | detect columns | get NAME
+  let pod =  _fk_fzf $pods "pod:"
+  let follow =  _fk_fzf ["yes", "no"] "follow:"
+  let command = $"kubectl -n ( $namespace ) logs ( $pod ) (if $follow == 'yes' { '-f' } else { '' })"
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
   }
-  if $action == "exec" {
-    fk_exec; return null
+  nu -c $command
+  return
+}
+
+def _fk_represent [command: string, dry: bool] {
+  mut c = $command
+  let repr = _fk_fzf ["narrow", "wide", "json", "yaml", "structured"] "representation:"
+  if $repr == "json" or $repr == "yaml" or $repr == "wide" {
+    $c = $"($c) -o ($repr)"
   }
-  if $action == "edit" {
-    fk_edit; return null
+  if $repr == "structured" {
+    $c = $"($c) -o yaml"
   }
-  if $action == "delete" {
-    fk_delete; return null
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
   }
-  if $action == "copy" {
-    fk_cp; return null
+  mut out = nu -c $c 
+  if $repr == "wide" or $repr == "narrow" {
+    $out = $out | detect columns
   }
-  if $action == "context" {
-    fk_ctx; return null
+  if $repr == "structured" {
+    $out = $out | from yaml
+  }
+  return $out
+}
+
+def _fk_get [kinds, cache_dir: string, dry: bool] {
+  let kind = _fk_fzf $kinds "kind:"
+  if $kind == "namespaces" {
+    return ( _fk_represent "kubectl get ns" $dry )
+  }
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf (["all"] | append $namespaces) "namespace:"
+  if $namespace == "all" {
+      return ( _fk_represent $"kubectl get ( $kind ) -A" $dry )
+  }
+  let objs = ["all"] | append (kubectl -n $namespace get $kind | detect columns | get NAME)
+  let obj =  _fk_fzf $objs $"($kind)s:"
+  if $obj == "all" {
+    return ( _fk_represent $"kubectl -n ( $namespace ) get ( $kind )"  $dry )
+  }
+  _fk_represent $"kubectl -n ( $namespace ) get ( $kind ) ( $obj )"  $dry
+}
+
+def _fk_exec [cache_dir: string, dry: bool] {
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf $namespaces "namespace:"
+  let pods = kubectl -n $namespace get po | detect columns | get NAME
+  let pod =  _fk_fzf $pods "pod:"
+  let interactive =  _fk_fzf ["yes", "no"] "interactive:"
+  let command = (input "command: ")
+  let command = $"kubectl -n ( $namespace ) exec ( $pod ) (if $interactive == 'yes' { '-it' } else { '' }) -- ( $command )"
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
+  }
+  nu -c $command
+  return
+}
+
+def _fk_cp [cache_dir: string, dry: bool] {
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf $namespaces "namespace:"
+  let pods = kubectl -n $namespace get po | detect columns | get NAME
+  let pod =  _fk_fzf $pods "pod:"
+
+  let container_path = (input "container path: ") 
+  let local_path = (input "local path: ")
+  let command = $"kubectl cp ($namespace)/($pod):($container_path) ( $local_path )"
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry { 
+    return
+  }
+  nu -c $command
+  return
+}
+
+def _fk_fcp [cache_dir: string, dry: bool] {
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf $namespaces "namespace:"
+  let pods = kubectl -n $namespace get po | detect columns | get NAME
+  let pod =  _fk_fzf $pods "pod:"
+
+  let found = kubectl -n $namespace exec $pod -- find (input "basefolder: ") -maxdepth 5
+  let container_path = $found | fzf --header "container path"
+
+  let local_path = (input "local path: ")
+  let command = $"kubectl cp ($namespace)/($pod):($container_path) ( $local_path )"
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
+  }
+  nu -c $command
+  return
+}
+
+def _fk_delete [kinds, cache_dir: string, dry: bool] {
+  let kind = _fk_fzf $kinds "kind:"
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf ($namespaces) "namespace:"
+  let objs = (kubectl -n $namespace get $kind | detect columns | get NAME)
+  let chosen_objs =  _fk_multifzf $objs $"($kind)s:"
+  print $chosen_objs
+  let force = _fk_fzf ["yes", "no" ] "force:"
+  let command = $"( $chosen_objs ) | each {|obj| kubectl -n ( $namespace ) delete ( $kind ) $obj (if $force == 'yes' { '--force' } else { '' })} "
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
+  }
+  nu -c $command
+  return
+}
+
+def _fk_edit [kinds, cache_dir: string, dry: bool] {
+  let kind = _fk_fzf $kinds "kind:"
+
+  let namespaces = _fk_get_namespaces $cache_dir
+  let namespace = _fk_fzf ($namespaces) "namespace:"
+  let objs = (kubectl -n $namespace get $kind | detect columns | get NAME)
+  let obj =  _fk_fzf $objs $"($kind)s:"
+  let command = $"kubectl -n ( $namespace ) edit ( $kind ) ( $obj )"
+  print $"(ansi green)( $command ) (ansi white)"
+  if $dry {
+    return
+  }
+  nu -c $command
+  return
+}
+
+def _fk_run_flags [flags, kinds, cache_dir: string] {
+  if $flags.install {
+    return ( _fk_install $cache_dir )
+  }
+  if $flags.uninstall {
+    return ( _fk_uninstall $cache_dir )
+  }
+  if $flags.empty_cache {
+    return ( _fk_empty_cache $cache_dir )
+  }
+  if $flags.logs {
+    return ( _fk_logs $cache_dir $flags.dry )
+  }
+  if $flags.get {
+    return ( _fk_get $kinds $cache_dir $flags.dry )
+  }
+  if $flags.exec {
+    return ( _fk_exec $cache_dir $flags.dry )
+  }
+  if $flags.edit {
+    return ( _fk_edit $kinds $cache_dir $flags.dry )
+  }
+  if $flags.delete {
+    return ( _fk_delete $kinds $cache_dir $flags.dry )
+  }
+  if $flags.copy {
+    return ( _fk_cp $cache_dir $flags.dry )
   }
 }
+
+def _fk_run_actions [kinds, cache_dir: string, dry: bool] {
+  let actions = [
+    "logs"
+    "get"
+    "exec"
+    "edit"
+    "delete"
+    "copy"
+    "copy fuzzy"
+  ]
+  let action = _fk_fzf $actions "action:"
+  if $action == "logs" {
+    return ( _fk_logs $cache_dir $dry )
+  }
+  if $action == "get" {
+    return ( _fk_get $kinds $cache_dir $dry )
+  }
+  if $action == "exec" {
+    return ( _fk_exec $cache_dir $dry)
+  }
+  if $action == "edit" {
+    return ( _fk_edit $kinds $cache_dir $dry)
+  }
+  if $action == "delete" {
+    return ( _fk_delete $kinds $cache_dir $dry)
+  }
+  if $action == "copy" {
+    return ( _fk_cp $cache_dir $dry)
+  }
+  if $action == "copy fuzzy" {
+    return ( _fk_fcp $cache_dir $dry)
+  }
+}
+
+def fk [
+  --install (-I)
+  --uninstall (-X)
+  --empty-cache (-R)
+  --logs (-l)
+  --get (-g)
+  --exec (-E)
+  --edit (-e)
+  --delete (-D)
+  --copy (-c)
+  --dry (-d)
+] {
+  let cache_dir = $"($env.HOME)/.cache/fk"
+  let kinds = [
+    "pod"
+    "namespaces"
+    "deployment"
+    "statefulset"
+    "daemonset"
+    "job"
+    "cronjob"
+    "service"
+  ]
+  mut flags = {
+    install: $install,
+    uninstall: $uninstall,
+    empty_cache: $empty_cache,
+    get: $get,
+    logs: $logs,
+    exec: $exec,
+    edit: $edit,
+    delete: $delete,
+    copy: $copy,
+  }
+  # _fk_get $kinds $cache_dir $dry
+  if ($flags | values | any {|flag| $flag == true }) {
+    $flags = $flags | upsert "dry" $dry
+    return ( _fk_run_flags $flags $kinds $cache_dir )
+  }
+  return ( _fk_run_actions $kinds $cache_dir $dry )
+} 
 
