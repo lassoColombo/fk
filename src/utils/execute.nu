@@ -51,29 +51,38 @@ def _fk_represent_cmd [command: string, dry, clip, run: bool] {
     $c = $"($c) -o yaml"
   }
   if $dry {
+    if $repr == "wide" or $repr == "narrow" {
+      $c = $"($c) | detect columns"
+    }
+    if $repr == "structured" {
+      $c = $"($c) | from yaml"
+    }
     if $clip {
       _fk_ccp $c
       return
     }
     return $c
   }
-  if $clip {
-    _fk_ccp ( _fk_parse (nu -c $c) $repr )
-  }
-  if $run {
+  if $clip or $run {
     print $"(ansi green_bold)executed command:(ansi magenta) ( $c ) (ansi reset)"
-    return ( _fk_parse (nu -c $c) $repr )
+    let out = (nu -c $c)
+    if $repr == "wide" or $repr == "narrow" {
+      return ($out | detect columns)
+    }
+    if $repr == "structured" {
+      return ($out | from yaml)
+    }
+    if $clip {
+      _fk_ccp $out
+      return
+    }
+    return $out
   }
-  commandline edit --replace $c
-}
-
-def _fk_parse [out, repr] {
   if $repr == "wide" or $repr == "narrow" {
-    return ( $out | detect columns )
+    $c = $"($c) | detect columns"
   }
   if $repr == "structured" {
-    print $out
-    return ( $out | from yaml )
+    $c = $"($c) | from yaml"
   }
-  $out
+  commandline edit --replace $c
 }
