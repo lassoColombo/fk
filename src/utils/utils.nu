@@ -9,10 +9,12 @@ def _fk_install [cache_dir: string] {
 
 def _fk_uninstall [cache_dir: string] {
   rm -rf $cache_dir
+  print $"(ansi green_bold)removed cache dir:(ansi magenta) ( $cache_dir )(ansi reset)"
 }
 
 def _fk_empty_cache [cache_dir: string] {
   rm -rf $"( $cache_dir )/*"
+  print $"(ansi green_bold)emptied cache:(ansi magenta) ( $cache_dir )(ansi reset)"
 }
 
 def _fk_fzf [l, h] {
@@ -30,43 +32,51 @@ def _fk_previewfzf [l, h, p] {
 def _fk_ccp [text: string] {
   # :TODO: cross platform support
   $text | pbcopy
+  if ($text | str length) < 400 {
+    print $"(ansi green_bold)copied to clipboard:(ansi magenta) ( $text )(ansi reset)"
+    return
+  }
+    print $"(ansi green_bold)copied to clipboard(ansi reset)"
 }
 
-def _fk_execute [command: string, dry, clip: bool] {
+def _fk_execute [command: string, dry, clip, run: bool] {
   if $dry {
     if $clip {
-      print $"(ansi green)copied to clipboard:(ansi reset) ( $command )"
       _fk_ccp $command
       return
     }
-    print $"(ansi green)( $command ) (ansi reset)"
-    return
+    return $command
   }
-  print $"(ansi green)executed command:(ansi reset) ( $command )"
-  let out = ( nu -c $command )
   if $clip {
-    print $"(ansi green)copied output to clipboard:(ansi reset)"
-    _fk_ccp $out
+    _fk_ccp ( nu -c $command )
     return
   }
-  $out
+  if $run {
+    print $"(ansi green_bold)executed command:(ansi magenta) ( $command ) (ansi reset)"
+    nu -c $command
+  }
+  commandline edit --replace $command
+  return
 }
 
 
-def _fk_execute_async [command: string, dry, clip: bool] {
+def _fk_execute_async [command: string, dry, clip, run: bool] {
   if $dry {
     if $clip {
-      print $"(ansi green)copied to clipboard:(ansi reset) ( $command )"
       _fk_ccp $command
       return
     }
-    print $"(ansi green)( $command ) (ansi reset)"
-    return
+    return $command
   }
   if $clip {
-    print $"(ansi yellow)clip option has no effect when performing an async command."
+    print $"(ansi yellow_bold)--clip option alone has no effect when performing an async command."
+    print $"If you want to copy the command to the clipboard, you must pass the --dry option as well, but you cannot copy the command output.(ansi reset)"
+    return
   }
-  print $"(ansi green)executed command:(ansi reset) ( $command )"
-  nu -c $command 
+  if $run {
+    print $"(ansi green_bold)executed command:(ansi magenta) ( $command ) (ansi reset)"
+    nu -c $command
+  }
+  commandline edit --replace $command
   return
 }
