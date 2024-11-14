@@ -6,29 +6,29 @@ source $"( $fk_home_dir )/src/utils/cache.nu"
 def _fk_get [kinds, cache_dir: string, dry, clip, run: bool] {
   let kind = _fk_fzf $kinds "kind:"
   if $kind == "namespaces" {
-    return ( fk_represent_cmd "kubectl get ns" $dry $clip $run)
+    return ( _fk_represent_cmd "kubectl get ns" $dry $clip $run)
   }
   let namespaces = _fk_get_namespaces $cache_dir
   let namespace = _fk_fzf (["all"] | append $namespaces) "namespace:"
   if $namespace == "all" {
-      return ( fk_represent_cmd $"kubectl get ( $kind ) -A" $dry $clip $run)
+      return ( _fk_represent_cmd $"kubectl get ( $kind ) -A" $dry $clip $run)
   }
   let objs = ["all"] | append (kubectl -n $namespace get $kind | detect columns | get NAME)
   let obj =  _fk_fzf $objs $"($kind)s:"
   if $obj == "all" {
-    return ( fk_represent_cmd $"kubectl -n ( $namespace ) get ( $kind )"  $dry $clip $run)
+    return ( _fk_represent_cmd $"kubectl -n ( $namespace ) get ( $kind )"  $dry $clip $run)
   }
   mut o = kubectl -n $namespace get $kind $obj -o yaml | from yaml
   mut keys = $o | columns
   mut field = _fk_fzf  ( ["all"] | append $keys ) "field:"
   if $field == "all" {
-     return ( fk_represent_cmd $"kubectl -n ( $namespace ) get ( $kind ) ( $obj )"  $dry $clip $run)
+     return ( _fk_represent_cmd $"kubectl -n ( $namespace ) get ( $kind ) ( $obj )"  $dry $clip $run)
   }
   while $field != "this" {
     $o = $o | get $"($field)"
     let t = $o | describe
     if $t == "string" or $t == "int" or $t == "bool" {
-      return ( _fk_represent_var $o $clip $run)
+      return ( __fk_represent_var $o $clip $run)
     }
     $keys = $o | columns
     $field = _fk_fzf  ( ["this"] | append $keys ) "field:"

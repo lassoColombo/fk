@@ -6,6 +6,8 @@ source $"( $fk_home_dir )/src/kube/exec.nu"
 source $"( $fk_home_dir )/src/kube/get.nu"
 source $"( $fk_home_dir )/src/kube/logs.nu"
 source $"( $fk_home_dir )/src/kube/scale.nu"
+source $"( $fk_home_dir )/src/kube/describe.nu"
+source $"( $fk_home_dir )/src/kube/rollout.nu"
 
 def _fk_run_flags [flags, kinds, cache_dir: string] {
   if $flags.install {
@@ -42,6 +44,12 @@ def _fk_run_flags [flags, kinds, cache_dir: string] {
   if $flags.scale {
     return ( _fk_scale $kinds $cache_dir $flags.dry $flags.clip $flags.run)
   }
+  if $flags.describe {
+    return ( _fk_describe $kinds $cache_dir $flags.dry $flags.clip $flags.run)
+  }
+  if $flags.rollout {
+    return ( _fk_rollout $kinds $cache_dir $flags.dry $flags.clip $flags.run)
+  }
 }
 
 def _fk_run_actions [kinds, cache_dir: string, dry, clip, run: bool] {
@@ -53,6 +61,8 @@ def _fk_run_actions [kinds, cache_dir: string, dry, clip, run: bool] {
     "delete"
     "copy"
     "scale"
+    "describe"
+    "rollout"
   ]
   let action = _fk_fzf $actions "action:"
   if $action == "logs" {
@@ -76,21 +86,30 @@ def _fk_run_actions [kinds, cache_dir: string, dry, clip, run: bool] {
   if $action == "scale" {
     return ( _fk_scale $kinds $cache_dir $dry $clip $run)
   }
+  if $action == "describe" {
+    return ( _fk_describe $kinds $cache_dir $dry $clip $run)
+  }
+  if $action == "rollout" {
+    return ( _fk_rollout $kinds $cache_dir $dry $clip $run)
+  }
 }
 
 def fk [
   --install (-I)
   --uninstall (-X)
-  --empty-cache (-x)
+  --empty-cache (-z)
+
   --logs (-l)
   --get (-g)
   --exec (-E)
   --edit (-e)
-  --delete (-d)
+  --delete (-D)
   --copy (-c)
   --scale (-s)
+  --describe (-d)
+  --rollout (-r)
 
-  --dry (-D)
+  --dry (-R)
   --clip (-C)
   --run (-R)
 ] {
@@ -115,6 +134,7 @@ def fk [
     edit: $edit,
     delete: $delete,
     copy: $copy,
+    describe: $describe,
   }
   if ($flags | values | any {|flag| $flag == true }) {
     $flags = $flags | upsert "dry" $dry

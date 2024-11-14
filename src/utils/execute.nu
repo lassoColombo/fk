@@ -41,7 +41,7 @@ def _fk_execute_async [command: string, dry, clip, run: bool] {
   return
 }
 
-def fk_represent_cmd [command: string, dry, clip, run: bool] {
+def _fk_represent_cmd [command: string, dry, clip, run: bool] {
   mut c = $command
   let repr = _fk_fzf ["narrow", "wide", "json", "yaml", "structured"] "representation:"
   if $repr == "json" or $repr == "yaml" or $repr == "wide" {
